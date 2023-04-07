@@ -1,9 +1,6 @@
-use std::{
-    num::NonZeroU16,
-    ops::{Add, AddAssign},
-};
+use std::num::NonZeroU16;
 
-use bitflags::{bitflags, BitFlags};
+use bitflags::bitflags;
 use fixed::{traits::ToFixed, types::I32F32};
 pub use vec::Vec3;
 

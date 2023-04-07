@@ -1,16 +1,10 @@
 use console::Term;
-/** Simple demo showing 2 bodies thrown inside a room, the world is rendered
-as a simple ASCII side view. */
 use fppe::*;
 
-const ROOM_SIZE: i32 = 20;
+/** Simple demo showing 2 bodies thrown inside a room, the world is rendered
+as a simple ASCII side view. */
 
-//   TPE_Vec3 environmentDistance(TPE_Vec3 point, TPE_Unit maxDistance)
-//   {
-//     // our environemnt: just a simple room
-//     return TPE_envAABoxInside(point,TPE_vec3(ROOM_SIZE / 2,ROOM_SIZE / 2,0),
-//       TPE_vec3(ROOM_SIZE,ROOM_SIZE,ROOM_SIZE));
-//   }
+const ROOM_SIZE: i32 = 20;
 
 // the following functions are just for ASCII drawing the world
 
@@ -64,7 +58,7 @@ fn env_aa_box_inside(mut point: Vec3, center: Vec3, mut size: Vec3) -> Vec3 {
 }
 
 fn environment_distance(mut point: Vec3, _max_distance: Unit) -> Vec3 {
-    // our environemnt: just a simple room
+    // our environment: just a simple room
     env_aa_box_inside(
         point,
         Vec3::new(
@@ -132,8 +126,8 @@ fn main() {
     let mut screen: [char; SCREEN_W * SCREEN_H] = ['\0'; SCREEN_W * SCREEN_H];
 
     let mut first_body = {
-        /* we'll create the first body "by hand", just two joints (spheres) with one
-        connection: */
+        // we'll create the first body "by hand", just two joints (spheres) with one
+        // connection:
         let joints = vec![
             Joint::new(
                 Vec3::new(
@@ -158,8 +152,8 @@ fn main() {
         Body::new(joints, connections, 1)
     };
 
-    /* the other (a "box" approximated by spheres) will be made by the library
-    function: */
+    // the other (a "box" approximated by spheres) will be made by the library
+    // function:
     let mut second_body = Body::make_box(2, 2, 2, 1, 1);
     second_body.move_to(Vec3::new(
         Unit::from_num(ROOM_SIZE) / 2,
@@ -169,21 +163,18 @@ fn main() {
 
     // give some initial velocities and spins to the bodies:
 
-    // TPE_bodyAccelerate(&world.bodies[0], TPE_vec3(-1 * TPE_F / 8, TPE_F / 3, 0));
     first_body.accelerate(Vec3::new(
         -1 * Unit::from_num(1) / 8,
         Unit::from_num(1) / 3,
         Unit::from_num(0),
     ));
 
-    // TPE_bodySpin(&world.bodies[0], TPE_vec3(0, 0, -1 * TPE_F / 25));
     first_body.spin(Vec3::new(
         Unit::from_num(0),
         Unit::from_num(0),
         -1 * Unit::from_num(1) / 25,
     ));
 
-    // TPE_bodyAccelerate(&world.bodies[1], TPE_vec3(-1 * TPE_F / 2, 50, 0));
     second_body.accelerate(Vec3::new(
         -1 * Unit::from(1) / Unit::from_num(2),
         Unit::ONE / Unit::from_num(50),
@@ -227,10 +218,5 @@ fn main() {
 
             true
         });
-
-        //       TPE_worldStep(&world); // simulate next tick
-
-        //       for (int j = 0; j < world.bodyCount; ++j)
-        //         TPE_bodyApplyGravity(&world.bodies[j],TPE_F / 100);
     }
 }
