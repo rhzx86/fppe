@@ -186,7 +186,7 @@ fn main() {
     // TPE_bodyAccelerate(&world.bodies[1], TPE_vec3(-1 * TPE_F / 2, 50, 0));
     second_body.accelerate(Vec3::new(
         -1 * Unit::from(1) / Unit::from_num(2),
-        Unit::from_num(50),
+        Unit::ONE / Unit::from_num(50),
         Unit::from_num(0),
     ));
 
@@ -198,8 +198,8 @@ fn main() {
 
     let mut world = World::new(vec![first_body, second_body], environment_distance);
 
-    // simulate 200 frames
-    for i in 0..200 {
+    // simulate 300 frames
+    for i in 0..=300 {
         world.step(|bodies| {
             // draw the world every 10 frames
             if i % 10 == 0 {
@@ -216,7 +216,7 @@ fn main() {
                 }
 
                 print_screen(&screen);
-                println!("frame {}/{}", i, 200);
+                println!("frame {}", i);
                 println!("press enter to simulate another frame");
                 let _ = term.read_line();
             }

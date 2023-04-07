@@ -67,7 +67,7 @@ const LIGHT_DEACTIVATION: u8 = DEACTIVATE_AFTER - DEACTIVATE_AFTER / 10;
 
 /// Speed, in TPE_Units per ticks, that is considered low (used e.g. for auto
 /// deactivation of bodies).
-const LOW_SPEED: Unit = Unit::const_from_int(30);
+const LOW_SPEED: Unit = Unit::from_bits(30); // PROBABLY NOT CORRECT
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Joint {
