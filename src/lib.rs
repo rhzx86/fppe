@@ -43,11 +43,13 @@ const TENSION_GREATER_ACCELERATION_THRESHOLD: usize = TENSION_ACCELERATION_THRES
 /// Number by which the base acceleration (TPE_FRACTIONS_PER_UNIT per tick
 /// squared) caused by the connection tension will be divided. This should be
 /// power of 2.
-const TENSION_ACCELERATION_DIVIDER: Unit = Unit::const_from_int(32); // I AM NOT SURE THIS IS CORRECT
+pub const TENSION_ACCELERATION_DIVIDER: Unit =
+    Unit::from_bits(0b0000000000000000000000000000000000010000000000000000000000000000); // 1/64
 
 // Tension limit, in TPE_Units, after which a non-soft body will be reshaped.
 // Smaller number will keep more stable shapes but will cost more performance.
-const RESHAPE_TENSION_LIMIT: Unit = Unit::from_bits(20); // I AM NOT SURE THIS IS CORRECT
+pub const RESHAPE_TENSION_LIMIT: Unit =
+    Unit::from_bits(0b0000000000000000000000000000000000001010001111010111000010100011); // 1 / 25
 
 /// How many iterations of reshaping will be performed by the step function if
 /// the body's shape needs to be reshaped. Greater number will keep shapes more
@@ -67,7 +69,8 @@ const LIGHT_DEACTIVATION: u8 = DEACTIVATE_AFTER - DEACTIVATE_AFTER / 10;
 
 /// Speed, in TPE_Units per ticks, that is considered low (used e.g. for auto
 /// deactivation of bodies).
-const LOW_SPEED: Unit = Unit::from_bits(30); // PROBABLY NOT CORRECT
+pub const LOW_SPEED: Unit =
+    Unit::from_bits(0b0000000000000000000000000000000000010001000100010001000100010001); // physics step 1/60
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Joint {
