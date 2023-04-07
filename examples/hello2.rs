@@ -57,7 +57,7 @@ fn env_aa_box_inside(mut point: Vec3, center: Vec3, mut size: Vec3) -> Vec3 {
     return point;
 }
 
-fn environment_distance(mut point: Vec3, _max_distance: Unit) -> Vec3 {
+fn environment_distance(point: Vec3, _max_distance: Unit) -> Vec3 {
     // our environment: just a simple room
     env_aa_box_inside(
         point,
