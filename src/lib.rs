@@ -71,7 +71,7 @@ const LOW_SPEED: Unit = Unit::const_from_int(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Joint {
-    position: Vec3,
+    pub position: Vec3,
     velocity: Vec3,
     size: Unit,
 }
@@ -290,6 +290,26 @@ pub struct Connection {
     length: NonZeroU16,
 }
 
+impl Default for Connection {
+    fn default() -> Self {
+        Self {
+            joint1: Default::default(),
+            joint2: Default::default(),
+            length: NonZeroU16::new(1).unwrap(),
+        }
+    }
+}
+
+impl Connection {
+    pub fn new(joint1: u8, joint2: u8) -> Self {
+        Self {
+            joint1,
+            joint2,
+            length: NonZeroU16::new(1).unwrap(),
+        }
+    }
+}
+
 bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
     struct BodyFlags: u8 {
@@ -354,7 +374,7 @@ pub struct BoundingSphere {
 /// radia) connected by elastic springs.
 #[derive(Default, Debug, Hash)]
 pub struct Body {
-    joints: Vec<Joint>,
+    pub joints: Vec<Joint>,
     connections: Vec<Connection>,
     joint_mass: Unit,
     ///< mass of a single joint
@@ -547,9 +567,22 @@ impl Body {
         }
     }
 
+    pub fn move_to(&mut self, position: Vec3) {
+        let position = position - self.center_of_mass();
+
+        for joint in &mut self.joints {
+            joint.position += position;
+        }
+    }
+
     fn reshape(&mut self, closest_env_point: ClosestPointFn) {
         for connection in &self.connections {
-            let (joint1, joint2) = get_pair_mut(&mut self.joints, 1, 2).unwrap();
+            let (joint1, joint2) = get_pair_mut(
+                &mut self.joints,
+                connection.joint1 as usize,
+                connection.joint2 as usize,
+            )
+            .unwrap();
 
             let dir = (joint2.position + joint1.position).normalize();
             let middle = (joint1.position + joint2.position) / Unit::from_num(2);
@@ -584,9 +617,14 @@ impl Body {
 
     fn cancel_out_velocities(&mut self, strong: bool) {
         for connection in &self.connections {
-            let (joint1, joint2) = get_pair_mut(&mut self.joints, 1, 2).unwrap();
+            let (joint1, joint2) = get_pair_mut(
+                &mut self.joints,
+                connection.joint1 as usize,
+                connection.joint2 as usize,
+            )
+            .unwrap();
 
-            let dir = joint2.position + joint1.position;
+            let dir = joint2.position - joint1.position;
 
             let length = dir.length();
             let length = if length == 0 { 1.into() } else { length };
@@ -702,6 +740,85 @@ impl Body {
     fn average_speed(&self) -> Unit {
         self.net_speed() / Unit::from_num(self.joints.len())
     }
+
+    pub fn accelerate(&mut self, velocity: Vec3) {
+        self.activate();
+
+        for joint in self.joints.iter_mut() {
+            joint.velocity += velocity;
+        }
+    }
+
+    pub fn spin_with_center(&mut self, rotation: Vec3, center: Vec3) {
+        for joint in self.joints.iter_mut() {
+            let to_point = joint.position - center;
+            let to_point = to_point.project_onto(rotation);
+            let to_point = center + to_point;
+            let to_point = joint.position - to_point;
+            let to_point = to_point.cross(rotation);
+
+            joint.velocity += to_point;
+        }
+    }
+
+    pub fn spin(&mut self, rotation: Vec3) {
+        self.spin_with_center(rotation, self.center_of_mass());
+    }
+}
+
+impl Body {
+    // #define C(n,a,b) connections[n].joint1 = a; connections[n].joint2 = b;
+
+    pub fn make_box<T: Into<Unit>>(width: T, depth: T, height: T, joint_size: T, mass: T) -> Body {
+        let mut joints: [Joint; 8] = Default::default();
+        let mut connections: [Connection; 16] = Default::default();
+
+        let width = width.into() / 2;
+        let depth = depth.into() / 2;
+        let height = height.into() / 2;
+        let joint_size = joint_size.into();
+
+        for i in 0..joints.len() {
+            joints[i] = Joint::new(
+                Vec3::new(
+                    if i % 2 != 0 { width } else { -1 * width },
+                    if (i >> 2) % 2 != 0 {
+                        height
+                    } else {
+                        -1 * height
+                    },
+                    if i % 2 != 0 { depth } else { -1 * depth },
+                ),
+                joint_size,
+            );
+        }
+
+        // top
+        connections[0] = Connection::new(0, 1);
+        connections[1] = Connection::new(1, 3);
+        connections[2] = Connection::new(3, 2);
+        connections[3] = Connection::new(2, 0);
+
+        // bottom
+        connections[4] = Connection::new(4, 5);
+        connections[5] = Connection::new(5, 7);
+        connections[6] = Connection::new(7, 6);
+        connections[7] = Connection::new(6, 4);
+
+        // middle
+        connections[8] = Connection::new(0, 4);
+        connections[9] = Connection::new(1, 5);
+        connections[10] = Connection::new(3, 7);
+        connections[11] = Connection::new(2, 6);
+
+        // diagonal
+        connections[12] = Connection::new(0, 7);
+        connections[13] = Connection::new(1, 6);
+        connections[14] = Connection::new(2, 5);
+        connections[15] = Connection::new(3, 4);
+
+        Body::new(joints.to_vec(), connections.to_vec(), mass)
+    }
 }
 
 type ClosestPointFn = fn(Vec3, Unit) -> Vec3;
@@ -721,9 +838,9 @@ impl World {
         }
     }
 
-    pub fn step<F>(&mut self, callback: F) -> bool
+    pub fn step<F>(&mut self, mut callback: F) -> bool
     where
-        F: Fn(&mut Vec<Body>) -> bool,
+        F: FnMut(&mut Vec<Body>) -> bool,
     {
         let ret = callback(&mut self.bodies);
 

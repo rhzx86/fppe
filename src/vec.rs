@@ -74,6 +74,16 @@ impl Vec3 {
         // maybe use the implementation from glam?
         self.project_onto_normalized(rhs.normalize())
     }
+
+    /// Computes the cross product of `self` and `rhs`.
+    #[inline]
+    pub fn cross(self, rhs: Self) -> Self {
+        Self {
+            x: self.y * rhs.z - rhs.y * self.z,
+            y: self.z * rhs.x - rhs.z * self.x,
+            z: self.x * rhs.y - rhs.x * self.y,
+        }
+    }
 }
 
 impl Add for Vec3 {
