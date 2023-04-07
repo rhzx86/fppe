@@ -52,26 +52,31 @@ fn main() {
     let mut world = World::new(vec![body], environment_distance);
     let mut i = 0;
 
-    let divided_unit = Unit::from_num(1) / Unit::from_num(64);
-    println!("0b{:064b}", divided_unit.to_bits());
+    // let divided_unit = Unit::from_num(1) / Unit::from_num(100);
+    // println!("{}", divided_unit);
+    // println!("{}", (Unit::from_num(1) / 60));
+    // println!("0b{:064b}", (Unit::from_num(1) / 25).to_bits());
+    // println!("0b{:064b}", (Unit::from_num(1) / 60).to_bits());
 
     loop {
         let ret = world.step(|bodies| {
             let body = bodies.first_mut().unwrap();
-            let height = body.center_of_mass().y;
 
-            // println!("height {}", height);
+            if i % 6 == 0 {
+                let height = body.center_of_mass().y;
 
-            let downwards_acceleration = Unit::from_num(1) / Unit::from_num(100);
+                // println!("height {}", height);
 
-            // println!("{} {:.5}", downwards_acceleration, 1.0 / 100.0);
+                // println!("{} {:.5}", downwards_acceleration, 1.0 / 100.0);
 
-            for _ in 0..(height * 4).to_num() {
-                print!(" ");
+                for _ in 0..(height * 4).to_num() {
+                    print!(" ");
+                }
+
+                println!("*");
             }
 
-            println!("*");
-
+            let downwards_acceleration = Unit::from_num(1) / Unit::from_num(100);
             body.apply_gravity(downwards_acceleration);
 
             return !body.is_active();
