@@ -54,6 +54,21 @@ const RESHAPE_TENSION_LIMIT: Unit = Unit::from_bits(20); // I AM NOT SURE THIS I
 /// stable but will cost some performance.
 const RESHAPE_ITERATIONS: usize = 3;
 
+/// After how many ticks of low speed should a body be disabled. This mustn't
+/// be greater than 255.
+const DEACTIVATE_AFTER: u8 = 128;
+
+/// When a body is activated by a collision, its deactivation counter will be
+/// set to this value, i.e. after a collision the body will be prone to deactivate
+/// sooner than normally. This is to handle situations with many bodies touching
+/// each other that would normally keep activating each other, never coming to
+/// rest.
+const LIGHT_DEACTIVATION: u8 = DEACTIVATE_AFTER - DEACTIVATE_AFTER / 10;
+
+/// Speed, in TPE_Units per ticks, that is considered low (used e.g. for auto
+/// deactivation of bodies).
+const LOW_SPEED: Unit = Unit::const_from_int(30);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Joint {
     position: Vec3,
@@ -252,14 +267,14 @@ impl Joint {
         /* In the following a lot of TPE_F cancel out, feel free to
         check if confused. */
 
-        let m1Pm2 = non_zero(m1 + m2);
-        let v2Mv1 = non_zero(*v2 - *v1);
+        let m1_plus_m2 = non_zero(m1 + m2);
+        let v2_minus_v1 = non_zero(*v2 - *v1);
 
-        let m1v1Pm2v2 = ((m1 * *v1) + (m2 * *v2));
+        let m1v1_plus_m2v2 = (m1 * *v1) + (m2 * *v2);
 
-        *v1 = (((elasticity * m2) * v2Mv1) + m1v1Pm2v2) / m1Pm2;
+        *v1 = (((elasticity * m2) * v2_minus_v1) + m1v1_plus_m2v2) / m1_plus_m2;
 
-        *v2 = (((elasticity * m1) * -1 * v2Mv1) + m1v1Pm2v2) / m1Pm2;
+        *v2 = (((elasticity * m1) * -1 * v2_minus_v1) + m1v1_plus_m2v2) / m1_plus_m2;
     }
 }
 
@@ -612,17 +627,80 @@ impl Body {
     }
 
     fn resolve_collision_with_other_body(
-        &self,
-        other: &Body,
+        &mut self,
+        other: &mut Body,
         closest_env_point: ClosestPointFn,
     ) -> bool {
-        for joints in &self.joints {
-            for other_joints in &other.joints {
-                //
+        let mut collided = false;
+
+        for i in 0..self.joints.len() {
+            let (joint1_before, joint1, joint1_after) =
+                split_slice_before_after(&mut self.joints, i);
+
+            for j in 0..other.joints.len() {
+                let (joint2_before, joint2, joint2_after) =
+                    split_slice_before_after(&mut other.joints, j);
+
+                let orig_pos_1 = joint1.position;
+                let orig_pos_2 = joint2.position;
+
+                let joints_collided = Joint::resolve_collision_with_other_joint(
+                    joint1,
+                    joint2,
+                    self.joint_mass,
+                    other.joint_mass,
+                    (self.elasticity + other.elasticity) / 2,
+                    (self.friction + other.friction) / 2,
+                    closest_env_point,
+                );
+
+                if joints_collided {
+                    collided = true;
+
+                    if self.flags.contains(BodyFlags::NONROTATING) {
+                        Self::nonrotating_joint_collided(joint1_before, orig_pos_1, joint1, true);
+                        Self::nonrotating_joint_collided(joint1_after, orig_pos_1, joint1, true);
+                    }
+
+                    if other.flags.contains(BodyFlags::NONROTATING) {
+                        Self::nonrotating_joint_collided(joint2_before, orig_pos_2, joint2, true);
+                        Self::nonrotating_joint_collided(joint2_after, orig_pos_2, joint2, true);
+                    }
+                }
             }
         }
 
-        true
+        collided
+    }
+
+    fn stop(&mut self) {
+        for joint in &mut self.joints {
+            joint.velocity = Default::default();
+        }
+    }
+
+    fn activate(&mut self) {
+        // the if check has to be here, don't remove it
+
+        if self.flags.contains(BodyFlags::DEACTIVATED) {
+            self.stop();
+            self.flags.remove(BodyFlags::DEACTIVATED);
+            self.deactivate_count = 0;
+        }
+    }
+
+    fn net_speed(&self) -> Unit {
+        let mut velocity = Unit::ZERO;
+
+        for joint in &self.joints {
+            velocity += joint.velocity.length();
+        }
+
+        return velocity;
+    }
+
+    fn average_speed(&self) -> Unit {
+        self.net_speed() / Unit::from_num(self.joints.len())
     }
 }
 
@@ -760,9 +838,31 @@ impl World {
                 .filter(|b| b.flags.contains(BodyFlags::DEACTIVATED))
                 .chain(after.iter_mut())
             {
+                // firstly quick-check collision of body AA bounding boxes
+
                 let other_aabb = other_body.compute_aabb();
 
-                if aabb.overlaps_with(&other_aabb) {}
+                if aabb.overlaps_with(&other_aabb)
+                    && body.resolve_collision_with_other_body(other_body, self.environment)
+                {
+                    body.activate();
+                    body.deactivate_count = LIGHT_DEACTIVATION;
+
+                    other_body.activate();
+                    other_body.deactivate_count = LIGHT_DEACTIVATION;
+                }
+            }
+
+            if !body.flags.contains(BodyFlags::ALWAYS_ACTIVE) {
+                if body.deactivate_count >= DEACTIVATE_AFTER {
+                    body.stop();
+                    body.deactivate_count = 0;
+                    body.flags.insert(BodyFlags::DEACTIVATED);
+                } else if body.average_speed() <= LOW_SPEED {
+                    body.deactivate_count += 1;
+                } else {
+                    body.deactivate_count = 0;
+                }
             }
         }
 
