@@ -11,6 +11,14 @@ mod vec;
 
 pub type Unit = I32F32;
 
+fn non_zero(unit: Unit) -> Unit {
+    if unit == 0 {
+        1.into()
+    } else {
+        unit
+    }
+}
+
 /// Maximum number of iterations to try to uncollide two colliding bodies.
 const COLLISION_RESOLUTION_ITERATIONS: usize = 16;
 
@@ -152,6 +160,107 @@ impl Joint {
         // not collided
         return 0;
     }
+
+    fn resolve_collision_with_other_joint(
+        joint1: &mut Self,
+        joint2: &mut Self,
+        mass1: Unit,
+        mass2: Unit,
+        elasticity: Unit,
+        friction: Unit,
+        closest_env_point: ClosestPointFn,
+    ) -> bool {
+        let dir = joint2.position - joint1.position;
+        let d = dir.length() - joint1.size - joint2.size;
+
+        if d < 0 {
+            let pos1_backup = joint1.position;
+            let pos2_backup = joint2.position;
+
+            // separate joints, the shift distance will depend on the weight ratio:
+
+            let d = -1 * d * COLLISION_RESOLUTION_MARGIN;
+
+            let dir = dir.normalize();
+
+            let ratio = mass2 / (mass1 + mass2);
+
+            let shift_distance = ratio * d;
+
+            let shift = dir * shift_distance;
+
+            joint1.position += shift;
+
+            // compute new velocities
+
+            let vel = joint1.velocity.project_onto(dir);
+            joint1.velocity -= vel;
+
+            /* friction explanation: Not physically correct (doesn't depend on load),
+            friction basically means we weighted average the velocities of the bodies
+            in the direction perpendicular to the hit normal, in the ratio of their
+            masses, friction coefficient just says how much of this effect we apply
+            (it multiplies the friction vectors we are subtracting) */
+
+            let friction_vec = joint1.velocity;
+
+            let mut v1 = vel.dot(dir);
+
+            let vel = joint2.velocity.project_onto(dir);
+            joint2.velocity -= vel;
+
+            let friction_vec = joint2.velocity - friction_vec;
+
+            let mut v2 = vel.dot(dir);
+
+            Joint::velocities_after_collision(&mut v1, &mut v2, mass1, mass2, elasticity);
+
+            {
+                let vel = dir * v1;
+                joint1.velocity = joint1.velocity + vel + ((friction_vec * ratio) * friction);
+
+                let vel = dir * v2;
+                let ratio = Unit::ONE - ratio; // is this correct ?
+                joint2.velocity = joint2.velocity + vel - ((friction_vec * ratio) * friction);
+            }
+
+            // ensure the joints aren't colliding with environment
+
+            // TODO: make closes_env_point optional
+
+            if joint1.environment_resolve_collision(elasticity, friction, closest_env_point) == 2 {
+                joint1.position = pos1_backup;
+            }
+
+            if joint2.environment_resolve_collision(elasticity, friction, closest_env_point) == 2 {
+                joint2.position = pos2_backup;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    fn velocities_after_collision(
+        v1: &mut Unit,
+        v2: &mut Unit,
+        m1: Unit,
+        m2: Unit,
+        elasticity: Unit,
+    ) {
+        /* In the following a lot of TPE_F cancel out, feel free to
+        check if confused. */
+
+        let m1Pm2 = non_zero(m1 + m2);
+        let v2Mv1 = non_zero(*v2 - *v1);
+
+        let m1v1Pm2v2 = ((m1 * *v1) + (m2 * *v2));
+
+        *v1 = (((elasticity * m2) * v2Mv1) + m1v1Pm2v2) / m1Pm2;
+
+        *v2 = (((elasticity * m1) * -1 * v2Mv1) + m1v1Pm2v2) / m1Pm2;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -197,6 +306,27 @@ bitflags! {
 pub struct BoundingBox {
     pub min: Vec3,
     pub max: Vec3,
+}
+
+impl BoundingBox {
+    fn overlaps_with(&self, other: &BoundingBox) -> bool {
+        let dist = (self.min.x + self.max.x - other.max.x - other.min.x).abs();
+        if dist > self.max.x - self.min.x + other.max.x - other.min.x {
+            return false;
+        }
+
+        let dist = (self.min.y + self.max.y - other.max.y - other.min.y).abs();
+        if dist > self.max.y - self.min.y + other.max.y - other.min.y {
+            return false;
+        }
+
+        let dist = (self.min.z + self.max.z - other.max.z - other.min.z).abs();
+        if dist > self.max.z - self.min.z + other.max.z - other.min.z {
+            return false;
+        }
+
+        return true;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -480,6 +610,20 @@ impl Body {
             }
         }
     }
+
+    fn resolve_collision_with_other_body(
+        &self,
+        other: &Body,
+        closest_env_point: ClosestPointFn,
+    ) -> bool {
+        for joints in &self.joints {
+            for other_joints in &other.joints {
+                //
+            }
+        }
+
+        true
+    }
 }
 
 type ClosestPointFn = fn(Vec3, Unit) -> Vec3;
@@ -505,7 +649,9 @@ impl World {
     {
         let ret = callback(&mut self.bodies);
 
-        for body in &mut self.bodies {
+        for i in 0..self.bodies.len() {
+            let (before, body, after) = split_slice_before_after(&mut self.bodies, i);
+
             let first_joint_velocity = body.joints.first().map(|j| j.velocity).unwrap_or_default();
             let orig_pos = body.joints.first().unwrap().position;
 
@@ -605,6 +751,18 @@ impl World {
                         body.cancel_out_velocities(hard);
                     }
                 }
+            }
+
+            // iterate over first half of bodies only if they are deactivated,
+            // iterate over the second half unconditionally
+            for other_body in before
+                .iter_mut()
+                .filter(|b| b.flags.contains(BodyFlags::DEACTIVATED))
+                .chain(after.iter_mut())
+            {
+                let other_aabb = other_body.compute_aabb();
+
+                if aabb.overlaps_with(&other_aabb) {}
             }
         }
 
