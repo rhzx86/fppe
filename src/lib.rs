@@ -23,6 +23,29 @@ const COLLISION_RESOLUTION_MARGIN: Unit =
 /// as complex collisions of this kind should be relatively rare.
 const NONROTATING_COLLISION_RESOLVE_ATTEMPTS: usize = 8;
 
+/// Limit within which acceleration caused by connection tension won't be
+/// applied.
+const TENSION_ACCELERATION_THRESHOLD: usize = 5;
+
+/// Connection tension threshold after which twice as much acceleration will
+/// be applied. This helps prevent diverting joints that are "impaled" by
+/// environment.
+const TENSION_GREATER_ACCELERATION_THRESHOLD: usize = TENSION_ACCELERATION_THRESHOLD * 3;
+
+/// Number by which the base acceleration (TPE_FRACTIONS_PER_UNIT per tick
+/// squared) caused by the connection tension will be divided. This should be
+/// power of 2.
+const TENSION_ACCELERATION_DIVIDER: Unit = Unit::const_from_int(32); // I AM NOT SURE THIS IS CORRECT
+
+// Tension limit, in TPE_Units, after which a non-soft body will be reshaped.
+// Smaller number will keep more stable shapes but will cost more performance.
+const RESHAPE_TENSION_LIMIT: Unit = Unit::from_bits(20); // I AM NOT SURE THIS IS CORRECT
+
+/// How many iterations of reshaping will be performed by the step function if
+/// the body's shape needs to be reshaped. Greater number will keep shapes more
+/// stable but will cost some performance.
+const RESHAPE_ITERATIONS: usize = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Joint {
     position: Vec3,
@@ -358,6 +381,105 @@ impl Body {
             }
         }
     }
+
+    fn environment_collide(&self, closest_env_point: ClosestPointFn) -> bool {
+        for joint in &self.joints {
+            let distance_to_env = joint
+                .position
+                .distance(closest_env_point(joint.position, joint.size));
+
+            if distance_to_env <= joint.size {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    fn move_by(&mut self, offset: Vec3) {
+        for joint in &mut self.joints {
+            joint.position += offset;
+        }
+    }
+
+    fn reshape(&mut self, closest_env_point: ClosestPointFn) {
+        for connection in &self.connections {
+            let (joint1, joint2) = get_pair_mut(&mut self.joints, 1, 2).unwrap();
+
+            let dir = (joint2.position + joint1.position).normalize();
+            let middle = (joint1.position + joint2.position) / Unit::from_num(2);
+
+            let dir = dir * connection.length.get().into();
+
+            let position_backup = joint1.position;
+
+            joint1.position.x = middle.x - dir.x / 2;
+            joint1.position.y = middle.y - dir.y / 2;
+            joint1.position.z = middle.z - dir.z / 2;
+
+            if (joint1.position - closest_env_point(joint1.position, joint1.size)).length()
+                < joint1.size
+            {
+                joint1.position = position_backup;
+            }
+
+            let position_backup = joint2.position;
+
+            joint2.position.x = middle.x + dir.x / 2;
+            joint2.position.y = middle.y + dir.y / 2;
+            joint2.position.z = middle.z + dir.z / 2;
+
+            if (joint2.position - closest_env_point(joint2.position, joint2.size)).length()
+                < joint2.size
+            {
+                joint2.position = position_backup;
+            }
+        }
+    }
+
+    fn cancel_out_velocities(&mut self, strong: bool) {
+        for connection in &self.connections {
+            let (joint1, joint2) = get_pair_mut(&mut self.joints, 1, 2).unwrap();
+
+            let dir = joint2.position + joint1.position;
+
+            let length = dir.length();
+            let length = if length == 0 { 1.into() } else { length };
+
+            let mut cancel = true;
+
+            if strong {
+                let tension = connection_tension(length, connection.length.get().into());
+                cancel = tension.abs() >= TENSION_ACCELERATION_THRESHOLD;
+            }
+
+            if cancel {
+                let dir = dir.normalize();
+
+                let v1 = joint1.velocity.project_onto_normalized(dir);
+                let v2 = joint2.velocity.project_onto_normalized(dir);
+                let avg = (v1 + v2) / 2.into();
+
+                if strong {
+                    joint1.velocity.x = joint1.velocity.x - v1.x + avg.x;
+                    joint1.velocity.y = joint1.velocity.y - v1.y + avg.y;
+                    joint1.velocity.z = joint1.velocity.z - v1.z + avg.z;
+
+                    joint2.velocity.x = joint2.velocity.x - v2.x + avg.x;
+                    joint2.velocity.y = joint2.velocity.y - v2.y + avg.y;
+                    joint2.velocity.z = joint2.velocity.z - v2.z + avg.z;
+                } else {
+                    joint1.velocity.x = joint1.velocity.x - v1.x + (v1.x * 3 + avg.x) / 4;
+                    joint1.velocity.y = joint1.velocity.y - v1.y + (v1.y * 3 + avg.y) / 4;
+                    joint1.velocity.z = joint1.velocity.z - v1.z + (v1.z * 3 + avg.z) / 4;
+
+                    joint2.velocity.x = joint2.velocity.x - v2.x + (v2.x * 3 + avg.x) / 4;
+                    joint2.velocity.y = joint2.velocity.y - v2.y + (v2.y * 3 + avg.y) / 4;
+                    joint2.velocity.z = joint2.velocity.z - v2.z + (v2.z * 3 + avg.z) / 4;
+                }
+            }
+        }
+    }
 }
 
 type ClosestPointFn = fn(Vec3, Unit) -> Vec3;
@@ -385,6 +507,7 @@ impl World {
 
         for body in &mut self.bodies {
             let first_joint_velocity = body.joints.first().map(|j| j.velocity).unwrap_or_default();
+            let orig_pos = body.joints.first().unwrap().position;
 
             // apply joint velocities
             for joint in &mut body.joints {
@@ -415,13 +538,82 @@ impl World {
 
                     collided = body.environment_resolve_collision(self.environment);
                 }
+
+                if collided && body.environment_collide(self.environment) {
+                    body.move_by(orig_pos - body.joints.first().unwrap().position);
+                }
             } else {
-                //
+                // normal, rotating bodies
+
+                let mut body_tension = Unit::ZERO;
+
+                for connection in &body.connections {
+                    let (joint1, joint2) = get_pair_mut(
+                        &mut body.joints,
+                        connection.joint1 as usize,
+                        connection.joint2 as usize,
+                    )
+                    .unwrap();
+
+                    let dir = joint2.position - joint1.position;
+                    let tension = connection_tension(dir.length(), connection.length.get().into());
+
+                    body_tension += tension.abs();
+
+                    if tension.abs() > TENSION_ACCELERATION_THRESHOLD {
+                        let mut dir = dir.normalize();
+
+                        if tension.abs() > TENSION_GREATER_ACCELERATION_THRESHOLD {
+                            // apply twice the acceleration after a second threshold, not so
+                            // elegant but seems to work :)
+                            dir.x *= 2;
+                            dir.y *= 2;
+                            dir.z *= 2;
+                        }
+
+                        dir.x /= TENSION_ACCELERATION_DIVIDER;
+                        dir.y /= TENSION_ACCELERATION_DIVIDER;
+                        dir.z /= TENSION_ACCELERATION_DIVIDER;
+
+                        if tension < 0 {
+                            dir.x *= -1;
+                            dir.y *= -1;
+                            dir.z *= -1;
+                        }
+
+                        joint1.velocity += dir;
+                        joint2.velocity -= dir;
+                    }
+                }
+
+                if body.connections.len() > 0 {
+                    let hard = !body.flags.contains(BodyFlags::SOFT);
+
+                    if hard {
+                        body.reshape(self.environment);
+
+                        let body_tension = body_tension / Unit::from_num(body.connections.len());
+
+                        if body_tension > RESHAPE_TENSION_LIMIT {
+                            for _ in 0..RESHAPE_ITERATIONS {
+                                body.reshape(self.environment);
+                            }
+                        }
+                    }
+
+                    if !body.flags.contains(BodyFlags::SIMPLE_CONN) {
+                        body.cancel_out_velocities(hard);
+                    }
+                }
             }
         }
 
         return ret;
     }
+}
+
+fn connection_tension(length: Unit, desired_length: Unit) -> Unit {
+    length / desired_length
 }
 
 /// Panics if slice does not contain any elements.
@@ -432,6 +624,21 @@ fn split_slice_before_after<T>(slice: &mut [T], mid: usize) -> (&mut [T], &mut T
     let (item, after) = after.split_first_mut().unwrap();
 
     (before, item, after)
+}
+
+pub fn get_pair_mut<'b, T>(
+    slice: &'b mut [T],
+    first: usize,
+    second: usize,
+) -> Option<(&'b mut T, &'b mut T)> {
+    if first == second {
+        return None;
+    }
+
+    let first = slice.get_mut(first)? as *mut _;
+    let second = slice.get_mut(second)? as *mut _;
+
+    unsafe { Some((&mut *first, &mut *second)) }
 }
 
 #[cfg(test)]

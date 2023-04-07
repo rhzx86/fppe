@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 
 use crate::Unit;
 
@@ -176,5 +176,18 @@ impl MulAssign<Unit> for Vec3 {
         self.x.mul_assign(rhs);
         self.y.mul_assign(rhs);
         self.z.mul_assign(rhs);
+    }
+}
+
+impl Div<Unit> for Vec3 {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: Unit) -> Self {
+        Self {
+            x: self.x.div(rhs),
+            y: self.y.div(rhs),
+            z: self.z.div(rhs),
+        }
     }
 }
